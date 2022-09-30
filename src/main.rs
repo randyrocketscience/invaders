@@ -1,6 +1,6 @@
-use std::{error::Error, io, time::Duration, sync::mpsc, thread,};
+use std::{error::Error, io, time::{Duration, Instant}, sync::mpsc, thread::{self},};
 use crossterm::{terminal::{self, EnterAlternateScreen, LeaveAlternateScreen}, cursor::{Show, Hide}, ExecutableCommand, event::{self, KeyCode, Event}};
-use invaders::{frame::{self, new_frame}, render};
+use invaders::{frame::{self, new_frame, Drawable}, render, player::Player, invader::{Invaders, Invader}};
 use rusty_audio::Audio;
 
 fn main() -> Result <(), Box<dyn Error>> {
@@ -36,13 +36,25 @@ fn main() -> Result <(), Box<dyn Error>> {
     });
 
     // Game Loop
+    let mut player = Player::new();
+    let mut instant = Instant::now();
+    let mut invaders = Invaders::new();
     'gameloop: loop {
         // Per Frame Init
-        let curr_frame = new_frame();
+        let delta = instant.elapsed();
+        instant = Instant::now();
+        let mut curr_frame = new_frame();
         // Input
         while event::poll(Duration::default())? {
             if let Event::Key(key_event) = event::read()? {
                 match key_event.code {
+                    KeyCode::Left => player.move_left(),
+                    KeyCode::Right => player.move_right(),
+                    KeyCode::Char(' ')  | KeyCode::Enter => {
+                        if player.shoot() {
+                            audio.play("pew");
+                        }
+                    },
                     KeyCode::Esc | KeyCode::Char('q') => {
                         audio.play("lose");
                         break 'gameloop;
@@ -52,9 +64,33 @@ fn main() -> Result <(), Box<dyn Error>> {
             }
         }
 
+        // Updates
+        player.update(delta);
+        if invaders.update(delta) {
+            audio.play("move");
+        }
+        if player.detect_hits(&mut invaders) {
+            audio.play("explode");
+        }
+
         // Draw & render
+        let drawables: Vec<&dyn Drawable> = vec![&player, &invaders];
+        for drawable in drawables {
+            drawable.draw(&mut curr_frame);
+        }
         let _ = render_tx.send(curr_frame);
         thread::sleep(Duration::from_millis(1));
+
+        // Win or Lose?
+        if invaders.all_killed() {
+            audio.play("win");
+            break 'gameloop;
+        }
+        if invaders.reached_bottom() {
+            audio.play("lose");
+            break 'gameloop;
+        }
+
     }
 
     // Clean up
